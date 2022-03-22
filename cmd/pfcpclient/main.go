@@ -45,6 +45,7 @@ func waitForCtrlC() {
 var localAddress = flag.String("l", "0.0.0.0:"+strconv.Itoa(pfcp.PFCP_UDP_PORT), "local address")
 var remoteAddress = flag.String("r", "", "remote address")
 var sessionFile = flag.String("s", "", "session yaml file")
+var quit = flag.Bool("q", false, "quit after sending requests")
 
 func main() {
 	fmt.Println("PFCP client v0.1")
@@ -53,12 +54,12 @@ func main() {
 		flag.Usage()
 		os.Exit(-1)
 	}
-	var sessions []*pfcp.SessionParams
+	var sessionMessages pfcp.SessionMessages
 	if *sessionFile != "" {
 		if sessionData, err := ioutil.ReadFile(*sessionFile); err != nil {
 			log.Fatal(err)
 		} else {
-			err = yaml.Unmarshal(sessionData, &sessions)
+			err = yaml.Unmarshal(sessionData, &sessionMessages)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -84,24 +85,33 @@ func main() {
 	}
 
 	n := 0
-	for _, sess := range sessions {
-		req, err = conn.SendSessionEstablishmentRequest(sess)
+	for _, msg := range sessionMessages.Messages {
+		switch msg.MessageParams.(type) {
+		case *pfcp.SessionEstablishmentParams:
+			req, err = conn.SendSessionEstablishmentRequest(msg.MessageParams.(*pfcp.SessionEstablishmentParams))
+		case *pfcp.SessionModificationParams:
+			req, err = conn.SendSessionModificationRequest(msg.MessageParams.(*pfcp.SessionModificationParams))
+		case *pfcp.SessionDeletionParams:
+			req, err = conn.SendSessionDeletionRequest(msg.MessageParams.(*pfcp.SessionDeletionParams))
+		}
 		if cause, timeout := req.GetResponse(); timeout {
-			fmt.Println("Timeout waiting for session establishment response")
+			fmt.Println("Timeout waiting for session message response")
 		} else if cause != pfcp.RequestAccepted {
-			log.Fatalf("session establishment failed: %s\n", cause)
+			log.Fatalf("session request failed: %s\n", cause)
 		} else {
 			n++
 		}
 	}
-	fmt.Printf("%d sessions created successfully\n", n)
-	waitForCtrlC()
+	fmt.Printf("%d session-related requests performed successfully\n", n)
+	if !*quit {
+		waitForCtrlC()
+	}
 	conn.Close()
 }
 
-func createTestSessions() []*pfcp.SessionParams {
+func createTestSessions() []*pfcp.SessionEstablishmentParams {
 	// UL session
-	pdi := pfcp.NewPDI(pfcp.Access)
+	pdi := pfcp.NewPDI(pfcp.SI_Access)
 	fteid := pfcp.NewFTEID(net.ParseIP("172.20.16.105"), 1234)
 	pdi.SetLocalFTEID(fteid)
 	ueIP := pfcp.NewUEIPAddress(net.ParseIP("10.10.10.10"), false)
@@ -111,15 +121,15 @@ func createTestSessions() []*pfcp.SessionParams {
 	pdr.SetFARID(12)
 
 	far := pfcp.NewCreateFar(12, pfcp.Forward)
-	forwParams := pfcp.NewForwardingParameters(pfcp.SGiLAN)
+	forwParams := pfcp.NewForwardingParameters(pfcp.DI_SGiLAN)
 	forwParams.SetNetworkInstance("sgi")
 	far.SetForwardingParameters(forwParams)
 
-	ulSession := &pfcp.SessionParams{Seid: 0, Pdrs: []*pfcp.CreatePdr{pdr}, Fars: []*pfcp.CreateFAR{far}}
+	ulSession := &pfcp.SessionEstablishmentParams{Seid: 0, Pdrs: []*pfcp.CreatePdr{pdr}, Fars: []*pfcp.CreateFAR{far}}
 
 	// DL session
 
-	pdi = pfcp.NewPDI(pfcp.SGiLAN)
+	pdi = pfcp.NewPDI(pfcp.SI_SGiLAN)
 	pdi.SetNetworkInstance("sgi")
 	ueIP = pfcp.NewUEIPAddress(net.ParseIP("10.10.10.10"), true)
 	pdi.SetUeIPAddress(ueIP)
@@ -129,15 +139,15 @@ func createTestSessions() []*pfcp.SessionParams {
 	pdr.SetFARID(13)
 
 	far = pfcp.NewCreateFar(13, pfcp.Forward)
-	forwParams = pfcp.NewForwardingParameters(pfcp.Access)
+	forwParams = pfcp.NewForwardingParameters(pfcp.DI_Access)
 	forwParams.SetNetworkInstance("access")
 	ohc := pfcp.NewOuterGTPIPV4HeaderCreation(4321, net.ParseIP("172.20.16.99"))
 	forwParams.SetOuterHeaderCreation(ohc)
 	far.SetForwardingParameters(forwParams)
 
-	dlSession := &pfcp.SessionParams{Seid: 1, Pdrs: []*pfcp.CreatePdr{pdr}, Fars: []*pfcp.CreateFAR{far}}
+	dlSession := &pfcp.SessionEstablishmentParams{Seid: 1, Pdrs: []*pfcp.CreatePdr{pdr}, Fars: []*pfcp.CreateFAR{far}}
 
-	res := []*pfcp.SessionParams{ulSession, dlSession}
+	res := []*pfcp.SessionEstablishmentParams{ulSession, dlSession}
 	d, _ := yaml.Marshal(res)
 	fmt.Println(string(d))
 	return res
